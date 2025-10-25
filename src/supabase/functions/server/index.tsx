@@ -1,71 +1,58 @@
-import { Hono } from "npm:hono";
-import { cors } from "npm:hono/cors";
-import { logger } from "npm:hono/logger";
-import { createClient } from "npm:@supabase/supabase-js@2";
-import * as kv from "./kv_store.tsx";
+import { Hono } from 'npm:hono';
+import { cors } from 'npm:hono/cors';
+import { logger } from 'npm:hono/logger';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
+import * as kv from './kv_store.tsx';
+
 const app = new Hono();
 
-// Enable logger
+app.use('*', cors());
 app.use('*', logger(console.log));
 
-// Enable CORS for all routes and methods
-app.use(
-  "/*",
-  cors({
-    origin: "*",
-    allowHeaders: ["Content-Type", "Authorization"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    exposeHeaders: ["Content-Length"],
-    maxAge: 600,
-  }),
+const supabase = createClient(
+  Deno.env.get('SUPABASE_URL')!,
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 );
 
-// Initialize Supabase clients
-const supabaseAdmin = createClient(
-  Deno.env.get('SUPABASE_URL') ?? '',
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-);
-
-// Create storage bucket on startup
-(async () => {
-  try {
-    const { data: buckets } = await supabaseAdmin.storage.listBuckets();
-    const bucketName = 'make-dbafed67-profiles';
-    const bucketExists = buckets?.some(bucket => bucket.name === bucketName);
-    
-    if (!bucketExists) {
-      await supabaseAdmin.storage.createBucket(bucketName, {
-        public: true
-      });
-      console.log(`Created storage bucket: ${bucketName}`);
-    }
-  } catch (error) {
-    console.log(`Storage bucket setup: ${error}`);
+// Initialize storage bucket for profile pictures
+const initStorage = async () => {
+  const bucketName = 'make-d40630a2-profiles';
+  const { data: buckets } = await supabase.storage.listBuckets();
+  const bucketExists = buckets?.some(bucket => bucket.name === bucketName);
+  if (!bucketExists) {
+    await supabase.storage.createBucket(bucketName, { public: false });
+    console.log('Created profile pictures bucket');
   }
-})();
+};
 
-// Health check endpoint
-app.get("/make-server-dbafed67/health", (c) => {
-  return c.json({ status: "ok" });
-});
+initStorage();
 
-// ===== AUTH ROUTES =====
+// Helper to get authenticated user
+const getAuthUser = async (request: Request) => {
+  const accessToken = request.headers.get('Authorization')?.split(' ')[1];
+  if (!accessToken) return null;
+  const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+  if (error || !user) return null;
+  return user;
+};
 
-// Sign up
-app.post("/make-server-dbafed67/auth/signup", async (c) => {
+// ========== AUTH ROUTES ==========
+
+app.post('/make-server-d40630a2/signup', async (c) => {
   try {
-    const body = await c.req.json();
-    const { email, password, name } = body;
+    const { email, password, name } = await c.req.json();
     
     if (!email || !password || !name) {
-      return c.json({ error: "Email, password, and name are required" }, 400);
+      return c.json({ error: 'Email, password, and name are required' }, 400);
     }
 
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
+    // Create user with Supabase auth
+    const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
       user_metadata: { name },
-      email_confirm: true // Auto-confirm since email server isn't configured
+      // Automatically confirm the user's email since an email server hasn't been configured.
+      email_confirm: true
     });
 
     if (error) {
@@ -73,796 +60,724 @@ app.post("/make-server-dbafed67/auth/signup", async (c) => {
       return c.json({ error: error.message }, 400);
     }
 
-    // Create user profile
-    const profile = {
+    // Initialize user profile in KV store
+    await kv.set(`user:${data.user.id}`, {
       id: data.user.id,
-      email: data.user.email,
+      email,
       name,
-      profileImage: null,
-      points: 100, // Welcome bonus
+      profilePicture: null,
+      groups: [],
+      rewards: {
+        points: 0,
+        movieDiscounts: [],
+        cashback: 0
+      },
       createdAt: new Date().toISOString()
-    };
+    });
 
-    await kv.set(`profiles:${data.user.id}`, JSON.stringify(profile));
-    console.log(`Created user profile: ${data.user.id}`);
-
-    return c.json({ user: data.user, profile });
+    return c.json({ user: data.user, message: 'Account created successfully' });
   } catch (error) {
     console.log(`Signup error: ${error}`);
-    return c.json({ error: `Failed to sign up: ${error}` }, 500);
+    return c.json({ error: 'Failed to create account' }, 500);
   }
 });
 
-// ===== PROFILE ROUTES =====
+// ========== PROFILE ROUTES ==========
 
-// Get user profile
-app.get("/make-server-dbafed67/profile/:userId", async (c) => {
+app.get('/make-server-d40630a2/profile', async (c) => {
   try {
-    const userId = c.req.param("userId");
-    const profileData = await kv.get(`profiles:${userId}`);
-    
-    if (!profileData) {
-      return c.json({ error: "Profile not found" }, 404);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
-    
-    return c.json(JSON.parse(profileData));
+
+    const profile = await kv.get(`user:${user.id}`);
+    if (!profile) {
+      return c.json({ error: 'Profile not found' }, 404);
+    }
+
+    return c.json({ profile });
   } catch (error) {
-    console.log(`Error fetching profile: ${error}`);
-    return c.json({ error: `Failed to fetch profile: ${error}` }, 500);
+    console.log(`Get profile error: ${error}`);
+    return c.json({ error: 'Failed to fetch profile' }, 500);
   }
 });
 
-// Update user profile
-app.put("/make-server-dbafed67/profile/:userId", async (c) => {
+app.post('/make-server-d40630a2/profile/update', async (c) => {
   try {
-    const userId = c.req.param("userId");
-    const body = await c.req.json();
-    const { name, profileImage } = body;
-    
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (!profileData) {
-      return c.json({ error: "Profile not found" }, 404);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const profile = JSON.parse(profileData);
-    profile.name = name || profile.name;
-    profile.profileImage = profileImage !== undefined ? profileImage : profile.profileImage;
+    const { name } = await c.req.json();
+    const profile = await kv.get(`user:${user.id}`);
+    
+    if (!profile) {
+      return c.json({ error: 'Profile not found' }, 404);
+    }
 
-    await kv.set(`profiles:${userId}`, JSON.stringify(profile));
-    console.log(`Updated profile: ${userId}`);
-    return c.json(profile);
+    const updatedProfile = { ...profile, name };
+    await kv.set(`user:${user.id}`, updatedProfile);
+
+    return c.json({ profile: updatedProfile, message: 'Profile updated successfully' });
   } catch (error) {
-    console.log(`Error updating profile: ${error}`);
-    return c.json({ error: `Failed to update profile: ${error}` }, 500);
+    console.log(`Update profile error: ${error}`);
+    return c.json({ error: 'Failed to update profile' }, 500);
   }
 });
 
-// Upload profile image
-app.post("/make-server-dbafed67/profile/:userId/upload", async (c) => {
+app.post('/make-server-d40630a2/profile/upload-picture', async (c) => {
   try {
-    const userId = c.req.param("userId");
-    const body = await c.req.json();
-    const { imageData, fileName } = body;
-    
-    if (!imageData) {
-      return c.json({ error: "Image data is required" }, 400);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    // Convert base64 to buffer
-    const base64Data = imageData.split(',')[1] || imageData;
-    const buffer = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File;
     
-    const filePath = `${userId}/${fileName || Date.now()}.jpg`;
-    
-    const { data, error } = await supabaseAdmin.storage
-      .from('make-dbafed67-profiles')
-      .upload(filePath, buffer, {
-        contentType: 'image/jpeg',
+    if (!file) {
+      return c.json({ error: 'No file provided' }, 400);
+    }
+
+    const bucketName = 'make-d40630a2-profiles';
+    const fileName = `${user.id}/${Date.now()}_${file.name}`;
+    const fileBuffer = await file.arrayBuffer();
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucketName)
+      .upload(fileName, fileBuffer, {
+        contentType: file.type,
         upsert: true
       });
 
-    if (error) {
-      console.log(`Image upload error: ${error.message}`);
-      return c.json({ error: error.message }, 400);
+    if (uploadError) {
+      console.log(`Upload error: ${uploadError.message}`);
+      return c.json({ error: 'Failed to upload file' }, 500);
     }
 
-    // Get public URL
-    const { data: { publicUrl } } = supabaseAdmin.storage
-      .from('make-dbafed67-profiles')
-      .getPublicUrl(filePath);
+    const { data: signedUrlData } = await supabase.storage
+      .from(bucketName)
+      .createSignedUrl(fileName, 60 * 60 * 24 * 365); // 1 year expiry
 
-    // Update profile with image URL
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (profileData) {
-      const profile = JSON.parse(profileData);
-      profile.profileImage = publicUrl;
-      await kv.set(`profiles:${userId}`, JSON.stringify(profile));
-    }
+    const profile = await kv.get(`user:${user.id}`);
+    const updatedProfile = { ...profile, profilePicture: signedUrlData?.signedUrl };
+    await kv.set(`user:${user.id}`, updatedProfile);
 
-    return c.json({ url: publicUrl });
-  } catch (error) {
-    console.log(`Error uploading image: ${error}`);
-    return c.json({ error: `Failed to upload image: ${error}` }, 500);
-  }
-});
-
-// ===== REWARDS ROUTES =====
-
-// Get user rewards/points
-app.get("/make-server-dbafed67/rewards/:userId", async (c) => {
-  try {
-    const userId = c.req.param("userId");
-    const profileData = await kv.get(`profiles:${userId}`);
-    
-    if (!profileData) {
-      return c.json({ error: "Profile not found" }, 404);
-    }
-
-    const profile = JSON.parse(profileData);
-    const rewardsData = await kv.get(`rewards:${userId}`) || '{"redemptions":[]}';
-    const rewards = JSON.parse(rewardsData);
-
-    return c.json({
-      points: profile.points || 0,
-      redemptions: rewards.redemptions || []
+    return c.json({ 
+      profilePicture: signedUrlData?.signedUrl,
+      message: 'Profile picture uploaded successfully' 
     });
   } catch (error) {
-    console.log(`Error fetching rewards: ${error}`);
-    return c.json({ error: `Failed to fetch rewards: ${error}` }, 500);
+    console.log(`Upload picture error: ${error}`);
+    return c.json({ error: 'Failed to upload picture' }, 500);
   }
 });
 
-// Redeem reward
-app.post("/make-server-dbafed67/rewards/:userId/redeem", async (c) => {
+// ========== GROUP ROUTES ==========
+
+app.post('/make-server-d40630a2/groups/create', async (c) => {
   try {
-    const userId = c.req.param("userId");
-    const body = await c.req.json();
-    const { rewardType, pointsCost } = body;
-    
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (!profileData) {
-      return c.json({ error: "Profile not found" }, 404);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const profile = JSON.parse(profileData);
+    const { name, description, password } = await c.req.json();
     
-    if (profile.points < pointsCost) {
-      return c.json({ error: "Insufficient points" }, 400);
-    }
-
-    // Deduct points
-    profile.points -= pointsCost;
-    await kv.set(`profiles:${userId}`, JSON.stringify(profile));
-
-    // Record redemption
-    const rewardsData = await kv.get(`rewards:${userId}`) || '{"redemptions":[]}';
-    const rewards = JSON.parse(rewardsData);
-    
-    const redemption = {
-      id: crypto.randomUUID(),
-      type: rewardType,
-      points: pointsCost,
-      redeemedAt: new Date().toISOString()
-    };
-
-    rewards.redemptions = rewards.redemptions || [];
-    rewards.redemptions.push(redemption);
-    
-    await kv.set(`rewards:${userId}`, JSON.stringify(rewards));
-    console.log(`Reward redeemed: ${userId} - ${rewardType}`);
-
-    return c.json({ redemption, remainingPoints: profile.points });
-  } catch (error) {
-    console.log(`Error redeeming reward: ${error}`);
-    return c.json({ error: `Failed to redeem reward: ${error}` }, 500);
-  }
-});
-
-// Add points (for completing actions)
-app.post("/make-server-dbafed67/rewards/:userId/add", async (c) => {
-  try {
-    const userId = c.req.param("userId");
-    const body = await c.req.json();
-    const { points, reason } = body;
-    
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (!profileData) {
-      return c.json({ error: "Profile not found" }, 404);
-    }
-
-    const profile = JSON.parse(profileData);
-    profile.points = (profile.points || 0) + points;
-    await kv.set(`profiles:${userId}`, JSON.stringify(profile));
-
-    console.log(`Added ${points} points to ${userId}: ${reason}`);
-    return c.json({ points: profile.points });
-  } catch (error) {
-    console.log(`Error adding points: ${error}`);
-    return c.json({ error: `Failed to add points: ${error}` }, 500);
-  }
-});
-
-// ===== GROUP ROUTES (UPDATED WITH PASSWORD) =====
-
-// Create a new group
-app.post("/make-server-dbafed67/groups", async (c) => {
-  try {
-    const body = await c.req.json();
-    const { name, members, password, createdBy } = body;
-    
-    if (!name || !members || !Array.isArray(members)) {
-      return c.json({ error: "Name and members array are required" }, 400);
+    if (!name || !password) {
+      return c.json({ error: 'Group name and password are required' }, 400);
     }
 
     const groupId = crypto.randomUUID();
     const group = {
       id: groupId,
       name,
-      members,
-      password: password || null,
-      createdBy,
+      description: description || '',
+      password,
+      createdBy: user.id,
+      members: [user.id],
+      polls: [],
       createdAt: new Date().toISOString()
     };
 
-    await kv.set(`groups:${groupId}`, JSON.stringify(group));
-    console.log(`Created group: ${groupId}`);
-    
-    // Award points for creating a group
-    if (createdBy) {
-      const profileData = await kv.get(`profiles:${createdBy}`);
-      if (profileData) {
-        const profile = JSON.parse(profileData);
-        profile.points = (profile.points || 0) + 50;
-        await kv.set(`profiles:${createdBy}`, JSON.stringify(profile));
-      }
-    }
+    await kv.set(`group:${groupId}`, group);
 
-    return c.json(group);
+    // Add group to user's groups
+    const profile = await kv.get(`user:${user.id}`);
+    const updatedProfile = { ...profile, groups: [...(profile.groups || []), groupId] };
+    await kv.set(`user:${user.id}`, updatedProfile);
+
+    return c.json({ group, message: 'Group created successfully' });
   } catch (error) {
-    console.log(`Error creating group: ${error}`);
-    return c.json({ error: `Failed to create group: ${error}` }, 500);
+    console.log(`Create group error: ${error}`);
+    return c.json({ error: 'Failed to create group' }, 500);
   }
 });
 
-// Join a group with password
-app.post("/make-server-dbafed67/groups/:id/join", async (c) => {
+app.post('/make-server-d40630a2/groups/join', async (c) => {
   try {
-    const groupId = c.req.param("id");
-    const body = await c.req.json();
-    const { userId, userName, password } = body;
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const { groupId, password } = await c.req.json();
     
-    const groupData = await kv.get(`groups:${groupId}`);
-    if (!groupData) {
-      return c.json({ error: "Group not found" }, 404);
+    if (!groupId || !password) {
+      return c.json({ error: 'Group ID and password are required' }, 400);
     }
 
-    const group = JSON.parse(groupData);
-    
-    // Check password if group is protected
-    if (group.password && group.password !== password) {
-      return c.json({ error: "Incorrect password" }, 403);
-    }
-
-    // Add user to group if not already a member
-    if (!group.members.includes(userName)) {
-      group.members.push(userName);
-      await kv.set(`groups:${groupId}`, JSON.stringify(group));
-      
-      // Award points for joining a group
-      const profileData = await kv.get(`profiles:${userId}`);
-      if (profileData) {
-        const profile = JSON.parse(profileData);
-        profile.points = (profile.points || 0) + 25;
-        await kv.set(`profiles:${userId}`, JSON.stringify(profile));
-      }
-    }
-
-    return c.json(group);
-  } catch (error) {
-    console.log(`Error joining group: ${error}`);
-    return c.json({ error: `Failed to join group: ${error}` }, 500);
-  }
-});
-
-// Get all groups
-app.get("/make-server-dbafed67/groups", async (c) => {
-  try {
-    const groups = await kv.getByPrefix("groups:");
-    const parsedGroups = groups.map(g => JSON.parse(g));
-    return c.json(parsedGroups);
-  } catch (error) {
-    console.log(`Error fetching groups: ${error}`);
-    return c.json({ error: `Failed to fetch groups: ${error}` }, 500);
-  }
-});
-
-// Get a specific group
-app.get("/make-server-dbafed67/groups/:id", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const group = await kv.get(`groups:${id}`);
+    const group = await kv.get(`group:${groupId}`);
     
     if (!group) {
-      return c.json({ error: "Group not found" }, 404);
+      return c.json({ error: 'Group not found' }, 404);
     }
-    
-    return c.json(JSON.parse(group));
+
+    if (group.password !== password) {
+      return c.json({ error: 'Incorrect password' }, 401);
+    }
+
+    if (group.members.includes(user.id)) {
+      return c.json({ error: 'You are already a member of this group' }, 400);
+    }
+
+    // Add user to group
+    const updatedGroup = { ...group, members: [...group.members, user.id] };
+    await kv.set(`group:${groupId}`, updatedGroup);
+
+    // Add group to user's groups
+    const profile = await kv.get(`user:${user.id}`);
+    const updatedProfile = { ...profile, groups: [...(profile.groups || []), groupId] };
+    await kv.set(`user:${user.id}`, updatedProfile);
+
+    return c.json({ group: updatedGroup, message: 'Joined group successfully' });
   } catch (error) {
-    console.log(`Error fetching group: ${error}`);
-    return c.json({ error: `Failed to fetch group: ${error}` }, 500);
+    console.log(`Join group error: ${error}`);
+    return c.json({ error: 'Failed to join group' }, 500);
   }
 });
 
-// ===== EVENT ROUTES =====
-
-// Create a new event
-app.post("/make-server-dbafed67/events", async (c) => {
+app.get('/make-server-d40630a2/groups/:groupId', async (c) => {
   try {
-    const body = await c.req.json();
-    const { groupId, title, date, location, type, mood, createdBy } = body;
-    
-    if (!groupId || !title) {
-      return c.json({ error: "GroupId and title are required" }, 400);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const eventId = crypto.randomUUID();
-    const event = {
-      id: eventId,
-      groupId,
-      title,
-      date,
-      location,
-      type,
-      mood,
-      createdAt: new Date().toISOString()
-    };
-
-    await kv.set(`events:${eventId}`, JSON.stringify(event));
-    console.log(`Created event: ${eventId}`);
+    const groupId = c.req.param('groupId');
+    const group = await kv.get(`group:${groupId}`);
     
-    // Award points for creating an event
-    if (createdBy) {
-      const profileData = await kv.get(`profiles:${createdBy}`);
-      if (profileData) {
-        const profile = JSON.parse(profileData);
-        profile.points = (profile.points || 0) + 30;
-        await kv.set(`profiles:${createdBy}`, JSON.stringify(profile));
-      }
+    if (!group) {
+      return c.json({ error: 'Group not found' }, 404);
     }
 
-    return c.json(event);
+    if (!group.members.includes(user.id)) {
+      return c.json({ error: 'You are not a member of this group' }, 403);
+    }
+
+    // Fetch member details
+    const memberDetails = await Promise.all(
+      group.members.map(async (memberId: string) => {
+        const member = await kv.get(`user:${memberId}`);
+        return {
+          id: memberId,
+          name: member?.name || 'Unknown',
+          profilePicture: member?.profilePicture
+        };
+      })
+    );
+
+    return c.json({ group: { ...group, memberDetails } });
   } catch (error) {
-    console.log(`Error creating event: ${error}`);
-    return c.json({ error: `Failed to create event: ${error}` }, 500);
+    console.log(`Get group error: ${error}`);
+    return c.json({ error: 'Failed to fetch group' }, 500);
   }
 });
 
-// Get events for a group
-app.get("/make-server-dbafed67/events/group/:groupId", async (c) => {
+app.get('/make-server-d40630a2/groups', async (c) => {
   try {
-    const groupId = c.req.param("groupId");
-    const allEvents = await kv.getByPrefix("events:");
-    const groupEvents = allEvents
-      .map(e => JSON.parse(e))
-      .filter(e => e.groupId === groupId);
-    
-    return c.json(groupEvents);
-  } catch (error) {
-    console.log(`Error fetching events: ${error}`);
-    return c.json({ error: `Failed to fetch events: ${error}` }, 500);
-  }
-});
-
-// Get a specific event
-app.get("/make-server-dbafed67/events/:id", async (c) => {
-  try {
-    const id = c.req.param("id");
-    const event = await kv.get(`events:${id}`);
-    
-    if (!event) {
-      return c.json({ error: "Event not found" }, 404);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
+
+    const profile = await kv.get(`user:${user.id}`);
+    const groupIds = profile?.groups || [];
     
-    return c.json(JSON.parse(event));
+    const groups = await Promise.all(
+      groupIds.map(async (groupId: string) => {
+        return await kv.get(`group:${groupId}`);
+      })
+    );
+
+    return c.json({ groups: groups.filter(g => g !== null) });
   } catch (error) {
-    console.log(`Error fetching event: ${error}`);
-    return c.json({ error: `Failed to fetch event: ${error}` }, 500);
+    console.log(`Get groups error: ${error}`);
+    return c.json({ error: 'Failed to fetch groups' }, 500);
   }
 });
 
-// ===== POLL ROUTES =====
+// ========== POLL ROUTES ==========
 
-// Create a poll
-app.post("/make-server-dbafed67/polls", async (c) => {
+app.post('/make-server-d40630a2/polls/create', async (c) => {
   try {
-    const body = await c.req.json();
-    const { eventId, question, options, createdBy } = body;
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const { groupId, question, options, type } = await c.req.json();
     
-    if (!eventId || !question || !options || !Array.isArray(options)) {
-      return c.json({ error: "EventId, question, and options array are required" }, 400);
+    if (!groupId || !question || !options || options.length < 2) {
+      return c.json({ error: 'Group ID, question, and at least 2 options are required' }, 400);
+    }
+
+    const group = await kv.get(`group:${groupId}`);
+    if (!group || !group.members.includes(user.id)) {
+      return c.json({ error: 'Group not found or unauthorized' }, 403);
     }
 
     const pollId = crypto.randomUUID();
     const poll = {
       id: pollId,
-      eventId,
+      groupId,
       question,
-      options: options.map(opt => ({ text: opt, votes: [] })),
+      type: type || 'general', // general, movie, restaurant, location
+      options: options.map((opt: any) => ({
+        id: crypto.randomUUID(),
+        text: opt.text || opt,
+        data: opt.data || null, // Additional data like movie info, restaurant info
+        votes: [],
+        reactions: {}
+      })),
+      createdBy: user.id,
       createdAt: new Date().toISOString()
     };
 
-    await kv.set(`polls:${pollId}`, JSON.stringify(poll));
-    console.log(`Created poll: ${pollId}`);
-    
-    // Award points for creating a poll
-    if (createdBy) {
-      const profileData = await kv.get(`profiles:${createdBy}`);
-      if (profileData) {
-        const profile = JSON.parse(profileData);
-        profile.points = (profile.points || 0) + 20;
-        await kv.set(`profiles:${createdBy}`, JSON.stringify(profile));
-      }
-    }
+    await kv.set(`poll:${pollId}`, poll);
 
-    return c.json(poll);
+    // Add poll to group
+    const updatedGroup = { ...group, polls: [...(group.polls || []), pollId] };
+    await kv.set(`group:${groupId}`, updatedGroup);
+
+    return c.json({ poll, message: 'Poll created successfully' });
   } catch (error) {
-    console.log(`Error creating poll: ${error}`);
-    return c.json({ error: `Failed to create poll: ${error}` }, 500);
+    console.log(`Create poll error: ${error}`);
+    return c.json({ error: 'Failed to create poll' }, 500);
   }
 });
 
-// Vote on a poll
-app.post("/make-server-dbafed67/polls/:id/vote", async (c) => {
+app.post('/make-server-d40630a2/polls/:pollId/vote', async (c) => {
   try {
-    const pollId = c.req.param("id");
-    const body = await c.req.json();
-    const { optionIndex, userId, emoji } = body;
-    
-    const pollData = await kv.get(`polls:${pollId}`);
-    if (!pollData) {
-      return c.json({ error: "Poll not found" }, 404);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const poll = JSON.parse(pollData);
+    const pollId = c.req.param('pollId');
+    const { optionId } = await c.req.json();
     
-    if (optionIndex < 0 || optionIndex >= poll.options.length) {
-      return c.json({ error: "Invalid option index" }, 400);
+    if (!optionId) {
+      return c.json({ error: 'Option ID is required' }, 400);
     }
 
-    // Add vote with emoji reaction
-    poll.options[optionIndex].votes.push({
-      userId,
-      emoji: emoji || "👍",
-      timestamp: new Date().toISOString()
-    });
-
-    await kv.set(`polls:${pollId}`, JSON.stringify(poll));
-    console.log(`Vote added to poll: ${pollId}`);
-    
-    // Award points for voting
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (profileData) {
-      const profile = JSON.parse(profileData);
-      profile.points = (profile.points || 0) + 5;
-      await kv.set(`profiles:${userId}`, JSON.stringify(profile));
+    const poll = await kv.get(`poll:${pollId}`);
+    if (!poll) {
+      return c.json({ error: 'Poll not found' }, 404);
     }
 
-    return c.json(poll);
+    // Check if user is in the group
+    const group = await kv.get(`group:${poll.groupId}`);
+    if (!group || !group.members.includes(user.id)) {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    // Remove previous vote
+    poll.options = poll.options.map((opt: any) => ({
+      ...opt,
+      votes: opt.votes.filter((v: string) => v !== user.id)
+    }));
+
+    // Add new vote
+    const optionIndex = poll.options.findIndex((opt: any) => opt.id === optionId);
+    if (optionIndex === -1) {
+      return c.json({ error: 'Option not found' }, 404);
+    }
+
+    poll.options[optionIndex].votes.push(user.id);
+    await kv.set(`poll:${pollId}`, poll);
+
+    return c.json({ poll, message: 'Vote recorded successfully' });
   } catch (error) {
-    console.log(`Error voting on poll: ${error}`);
-    return c.json({ error: `Failed to vote: ${error}` }, 500);
+    console.log(`Vote error: ${error}`);
+    return c.json({ error: 'Failed to record vote' }, 500);
   }
 });
 
-// Get polls for an event
-app.get("/make-server-dbafed67/polls/event/:eventId", async (c) => {
+app.post('/make-server-d40630a2/polls/:pollId/react', async (c) => {
   try {
-    const eventId = c.req.param("eventId");
-    const allPolls = await kv.getByPrefix("polls:");
-    const eventPolls = allPolls
-      .map(p => JSON.parse(p))
-      .filter(p => p.eventId === eventId);
-    
-    return c.json(eventPolls);
-  } catch (error) {
-    console.log(`Error fetching polls: ${error}`);
-    return c.json({ error: `Failed to fetch polls: ${error}` }, 500);
-  }
-});
-
-// ===== RSVP ROUTES =====
-
-// Create or update RSVP
-app.post("/make-server-dbafed67/rsvps", async (c) => {
-  try {
-    const body = await c.req.json();
-    const { eventId, userId, status } = body;
-    
-    if (!eventId || !userId || !status) {
-      return c.json({ error: "EventId, userId, and status are required" }, 400);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const rsvp = {
-      eventId,
-      userId,
-      status,
-      timestamp: new Date().toISOString()
-    };
-
-    await kv.set(`rsvps:${eventId}:${userId}`, JSON.stringify(rsvp));
-    console.log(`RSVP created for event ${eventId} by user ${userId}`);
+    const pollId = c.req.param('pollId');
+    const { optionId, emoji } = await c.req.json();
     
-    // Award points for RSVPing
-    const profileData = await kv.get(`profiles:${userId}`);
-    if (profileData) {
-      const profile = JSON.parse(profileData);
-      profile.points = (profile.points || 0) + 10;
-      await kv.set(`profiles:${userId}`, JSON.stringify(profile));
+    if (!optionId || !emoji) {
+      return c.json({ error: 'Option ID and emoji are required' }, 400);
     }
 
-    return c.json(rsvp);
+    const poll = await kv.get(`poll:${pollId}`);
+    if (!poll) {
+      return c.json({ error: 'Poll not found' }, 404);
+    }
+
+    // Check if user is in the group
+    const group = await kv.get(`group:${poll.groupId}`);
+    if (!group || !group.members.includes(user.id)) {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    const optionIndex = poll.options.findIndex((opt: any) => opt.id === optionId);
+    if (optionIndex === -1) {
+      return c.json({ error: 'Option not found' }, 404);
+    }
+
+    if (!poll.options[optionIndex].reactions) {
+      poll.options[optionIndex].reactions = {};
+    }
+
+    if (!poll.options[optionIndex].reactions[emoji]) {
+      poll.options[optionIndex].reactions[emoji] = [];
+    }
+
+    // Toggle reaction
+    const reactionIndex = poll.options[optionIndex].reactions[emoji].indexOf(user.id);
+    if (reactionIndex > -1) {
+      poll.options[optionIndex].reactions[emoji].splice(reactionIndex, 1);
+    } else {
+      poll.options[optionIndex].reactions[emoji].push(user.id);
+    }
+
+    await kv.set(`poll:${pollId}`, poll);
+
+    return c.json({ poll, message: 'Reaction updated successfully' });
   } catch (error) {
-    console.log(`Error creating RSVP: ${error}`);
-    return c.json({ error: `Failed to create RSVP: ${error}` }, 500);
+    console.log(`React error: ${error}`);
+    return c.json({ error: 'Failed to update reaction' }, 500);
   }
 });
 
-// Get RSVPs for an event
-app.get("/make-server-dbafed67/rsvps/event/:eventId", async (c) => {
+app.get('/make-server-d40630a2/polls/:pollId', async (c) => {
   try {
-    const eventId = c.req.param("eventId");
-    const rsvps = await kv.getByPrefix(`rsvps:${eventId}:`);
-    const parsedRsvps = rsvps.map(r => JSON.parse(r));
-    return c.json(parsedRsvps);
-  } catch (error) {
-    console.log(`Error fetching RSVPs: ${error}`);
-    return c.json({ error: `Failed to fetch RSVPs: ${error}` }, 500);
-  }
-});
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
 
-// ===== GOOGLE PLACES API ROUTES =====
-
-// Search for places (restaurants, cafes, activities)
-app.post("/make-server-dbafed67/places/search", async (c) => {
-  try {
-    const body = await c.req.json();
-    const { location, type, mood } = body;
+    const pollId = c.req.param('pollId');
+    const poll = await kv.get(`poll:${pollId}`);
     
-    const apiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
+    if (!poll) {
+      return c.json({ error: 'Poll not found' }, 404);
+    }
+
+    const group = await kv.get(`group:${poll.groupId}`);
+    if (!group || !group.members.includes(user.id)) {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    return c.json({ poll });
+  } catch (error) {
+    console.log(`Get poll error: ${error}`);
+    return c.json({ error: 'Failed to fetch poll' }, 500);
+  }
+});
+
+// ========== SUGGESTIONS ROUTES ==========
+
+app.get('/make-server-d40630a2/suggestions/movies', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const mood = c.req.query('mood') || 'popular';
+    const apiKey = Deno.env.get('TMDB_API_KEY');
+    
     if (!apiKey) {
-      return c.json({ error: "Google Places API key not configured" }, 500);
+      return c.json({ error: 'TMDB API key not configured' }, 500);
     }
 
-    // Adjust search type based on mood
-    let searchType = type || "restaurant";
-    if (mood === "chill") {
-      searchType = "cafe";
-    } else if (mood === "adventurous") {
-      searchType = "tourist_attraction";
-    } else if (mood === "foodie") {
-      searchType = "restaurant";
+    let endpoint = 'popular';
+    if (mood === 'adventurous') endpoint = 'popular';
+    if (mood === 'chill') endpoint = 'top_rated';
+    if (mood === 'foodie') endpoint = 'popular'; // Can be customized
+
+    const response = await fetch(
+      `https://api.themoviedb.org/3/movie/${endpoint}?api_key=${apiKey}&language=en-US&page=1`
+    );
+
+    if (!response.ok) {
+      console.log(`TMDB API error: ${response.statusText}`);
+      return c.json({ error: 'Failed to fetch movies' }, 500);
     }
 
-    const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location}&radius=5000&type=${searchType}&key=${apiKey}`;
+    const data = await response.json();
+    const movies = data.results.slice(0, 10).map((movie: any) => ({
+      id: movie.id,
+      title: movie.title,
+      overview: movie.overview,
+      rating: movie.vote_average,
+      poster: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
+      releaseDate: movie.release_date
+    }));
+
+    return c.json({ movies });
+  } catch (error) {
+    console.log(`Get movies error: ${error}`);
+    return c.json({ error: 'Failed to fetch movie suggestions' }, 500);
+  }
+});
+
+app.get('/make-server-d40630a2/suggestions/places', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const type = c.req.query('type') || 'restaurant';
+    const location = c.req.query('location') || '40.7128,-74.0060'; // Default NYC
+    const apiKey = Deno.env.get('GOOGLE_PLACES_API_KEY');
     
-    const response = await fetch(url);
+    if (!apiKey) {
+      return c.json({ error: 'Google Places API key not configured' }, 500);
+    }
+
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location}&radius=5000&type=${type}&key=${apiKey}`
+    );
+
+    if (!response.ok) {
+      console.log(`Google Places API error: ${response.statusText}`);
+      return c.json({ error: 'Failed to fetch places' }, 500);
+    }
+
     const data = await response.json();
     
-    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-      console.log(`Google Places API error: ${data.status} - ${data.error_message}`);
-      return c.json({ error: `Places API error: ${data.status}` }, 500);
+    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
+      console.log(`Google Places API status: ${data.status}`);
+      return c.json({ error: `Google Places API error: ${data.status}` }, 500);
     }
 
-    // Return top 10 results with relevant info
     const places = (data.results || []).slice(0, 10).map((place: any) => ({
       id: place.place_id,
       name: place.name,
       address: place.vicinity,
       rating: place.rating,
-      userRatingsTotal: place.user_ratings_total,
-      priceLevel: place.price_level,
-      types: place.types,
-      location: place.geometry.location,
-      photo: place.photos?.[0]?.photo_reference
+      photos: place.photos?.[0]?.photo_reference ? 
+        `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${place.photos[0].photo_reference}&key=${apiKey}` 
+        : null,
+      location: place.geometry.location
     }));
 
-    return c.json(places);
+    return c.json({ places });
   } catch (error) {
-    console.log(`Error searching places: ${error}`);
-    return c.json({ error: `Failed to search places: ${error}` }, 500);
+    console.log(`Get places error: ${error}`);
+    return c.json({ error: 'Failed to fetch place suggestions' }, 500);
   }
 });
 
-// Get place details
-app.get("/make-server-dbafed67/places/:placeId", async (c) => {
+// ========== REWARDS ROUTES ==========
+
+app.get('/make-server-d40630a2/rewards', async (c) => {
   try {
-    const placeId = c.req.param("placeId");
-    const apiKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
-    
-    if (!apiKey) {
-      return c.json({ error: "Google Places API key not configured" }, 500);
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${apiKey}`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    if (data.status !== "OK") {
-      console.log(`Google Places API error: ${data.status}`);
-      return c.json({ error: `Places API error: ${data.status}` }, 500);
+    const profile = await kv.get(`user:${user.id}`);
+    if (!profile) {
+      return c.json({ error: 'Profile not found' }, 404);
     }
 
-    return c.json(data.result);
-  } catch (error) {
-    console.log(`Error fetching place details: ${error}`);
-    return c.json({ error: `Failed to fetch place details: ${error}` }, 500);
-  }
-});
+    // Calculate rewards based on activity
+    const groups = await kv.getByPrefix('group:');
+    const userGroups = groups.filter((g: any) => g.members?.includes(user.id));
+    const points = userGroups.length * 10; // 10 points per group
 
-// ===== TMDB MOVIE API ROUTES =====
-
-// Search for movies
-app.get("/make-server-dbafed67/movies/search", async (c) => {
-  try {
-    const query = c.req.query("query");
-    const apiKey = Deno.env.get("TMDB_API_KEY");
-    
-    if (!apiKey) {
-      return c.json({ error: "TMDB API key not configured" }, 500);
-    }
-
-    const url = `https://api.themoviedb.org/3/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query || "")}`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    const movies = (data.results || []).slice(0, 10).map((movie: any) => ({
-      id: movie.id,
-      title: movie.title,
-      overview: movie.overview,
-      releaseDate: movie.release_date,
-      rating: movie.vote_average,
-      posterPath: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      backdropPath: movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null
-    }));
-
-    return c.json(movies);
-  } catch (error) {
-    console.log(`Error searching movies: ${error}`);
-    return c.json({ error: `Failed to search movies: ${error}` }, 500);
-  }
-});
-
-// Get popular/trending movies
-app.get("/make-server-dbafed67/movies/popular", async (c) => {
-  try {
-    const apiKey = Deno.env.get("TMDB_API_KEY");
-    
-    if (!apiKey) {
-      return c.json({ error: "TMDB API key not configured" }, 500);
-    }
-
-    const url = `https://api.themoviedb.org/3/movie/popular?api_key=${apiKey}`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    const movies = (data.results || []).slice(0, 10).map((movie: any) => ({
-      id: movie.id,
-      title: movie.title,
-      overview: movie.overview,
-      releaseDate: movie.release_date,
-      rating: movie.vote_average,
-      posterPath: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      backdropPath: movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null
-    }));
-
-    return c.json(movies);
-  } catch (error) {
-    console.log(`Error fetching popular movies: ${error}`);
-    return c.json({ error: `Failed to fetch popular movies: ${error}` }, 500);
-  }
-});
-
-// Get movies by mood
-app.get("/make-server-dbafed67/movies/mood/:mood", async (c) => {
-  try {
-    const mood = c.req.param("mood");
-    const apiKey = Deno.env.get("TMDB_API_KEY");
-    
-    if (!apiKey) {
-      return c.json({ error: "TMDB API key not configured" }, 500);
-    }
-
-    // Map moods to genres
-    const moodToGenre: Record<string, number> = {
-      chill: 35, // Comedy
-      adventurous: 12, // Adventure
-      romantic: 10749, // Romance
-      scary: 27, // Horror
-      dramatic: 18 // Drama
+    const rewards = {
+      points,
+      level: Math.floor(points / 50) + 1,
+      movieDiscounts: [
+        { provider: 'AMC Theatres', discount: '10% off', code: 'PLANPAL10' },
+        { provider: 'Regal Cinemas', discount: '15% off', code: 'PLANPAL15' }
+      ],
+      cashback: points * 0.1, // $0.10 per point
+      badges: []
     };
 
-    const genreId = moodToGenre[mood] || 28; // Default to Action
-    const url = `https://api.themoviedb.org/3/discover/movie?api_key=${apiKey}&with_genres=${genreId}&sort_by=vote_average.desc&vote_count.gte=100`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-    
-    const movies = (data.results || []).slice(0, 10).map((movie: any) => ({
-      id: movie.id,
-      title: movie.title,
-      overview: movie.overview,
-      releaseDate: movie.release_date,
-      rating: movie.vote_average,
-      posterPath: movie.poster_path ? `https://image.tmdb.org/t/p/w500${movie.poster_path}` : null,
-      backdropPath: movie.backdrop_path ? `https://image.tmdb.org/t/p/w1280${movie.backdrop_path}` : null
-    }));
+    if (points >= 50) rewards.badges.push('Social Butterfly');
+    if (points >= 100) rewards.badges.push('Party Planner Pro');
+    if (userGroups.length >= 5) rewards.badges.push('Group Master');
 
-    return c.json(movies);
+    // Update profile with rewards
+    await kv.set(`user:${user.id}`, { ...profile, rewards });
+
+    return c.json({ rewards });
   } catch (error) {
-    console.log(`Error fetching movies by mood: ${error}`);
-    return c.json({ error: `Failed to fetch movies by mood: ${error}` }, 500);
+    console.log(`Get rewards error: ${error}`);
+    return c.json({ error: 'Failed to fetch rewards' }, 500);
   }
 });
 
-// ===== PLANPAL BOT ROUTES =====
+// ========== AI CHAT ROUTES ==========
 
-// Get smart suggestions from PlanPal bot
-app.post("/make-server-dbafed67/planpal/suggest", async (c) => {
+app.post('/make-server-d40630a2/chat', async (c) => {
   try {
-    const body = await c.req.json();
-    const { groupId, eventType, mood, memberLocations } = body;
-    
-    // Generate contextual suggestions based on input
-    const suggestions = [];
-    
-    if (eventType === "movie") {
-      suggestions.push({
-        type: "message",
-        text: `🎬 Hey! Based on your group's vibe, I've got some movie suggestions!`,
-        timestamp: new Date().toISOString()
-      });
-    } else if (eventType === "food") {
-      suggestions.push({
-        type: "message",
-        text: `🍽️ Looking for the perfect spot to eat? Let me help!`,
-        timestamp: new Date().toISOString()
-      });
-    } else if (eventType === "hangout") {
-      suggestions.push({
-        type: "message",
-        text: `🎉 Time to plan an awesome hangout! Here's what I recommend:`,
-        timestamp: new Date().toISOString()
-      });
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
 
-    // Add mood-based suggestions
-    if (mood === "chill") {
-      suggestions.push({
-        type: "message",
-        text: `For a chill vibe, how about a cozy café or a casual movie night? ☕`,
-        timestamp: new Date().toISOString()
-      });
-    } else if (mood === "adventurous") {
-      suggestions.push({
-        type: "message",
-        text: `Adventure time! 🏔️ Check out nearby hiking spots, escape rooms, or action movies!`,
-        timestamp: new Date().toISOString()
-      });
-    } else if (mood === "foodie") {
-      suggestions.push({
-        type: "message",
-        text: `Foodie mode activated! 🍕 I'll find the best-rated restaurants near all of you.`,
-        timestamp: new Date().toISOString()
-      });
+    const { groupId, message, context } = await c.req.json();
+    
+    if (!message) {
+      return c.json({ error: 'Message is required' }, 400);
     }
 
-    return c.json({ suggestions });
+    const apiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!apiKey) {
+      return c.json({ error: 'OpenAI API key not configured' }, 500);
+    }
+
+    // Get group context if groupId is provided
+    let systemPrompt = `You are PlanPal Bot, a friendly AI assistant that helps groups coordinate events, movie nights, weekend trips, and hangouts. 
+You can suggest movies, restaurants, and activities based on mood (chill, adventurous, foodie).
+Be concise, enthusiastic, and helpful. Use emojis occasionally to make responses fun.`;
+
+    if (groupId) {
+      const group = await kv.get(`group:${groupId}`);
+      if (group) {
+        systemPrompt += `\n\nCurrent group: ${group.name}${group.description ? ` - ${group.description}` : ''}
+Members: ${group.members.length} people`;
+        
+        if (group.polls && group.polls.length > 0) {
+          const polls = await Promise.all(
+            group.polls.slice(-3).map(async (pollId: string) => await kv.get(`poll:${pollId}`))
+          );
+          systemPrompt += `\n\nRecent polls: ${polls.map((p: any) => p?.question).filter(Boolean).join(', ')}`;
+        }
+      }
+    }
+
+    if (context) {
+      systemPrompt += `\n\nAdditional context: ${context}`;
+    }
+
+    // Call OpenAI API
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: message }
+        ],
+        temperature: 0.7,
+        max_tokens: 500
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.log(`OpenAI API error: ${JSON.stringify(errorData)}`);
+      return c.json({ error: 'Failed to get AI response' }, 500);
+    }
+
+    const data = await response.json();
+    const aiResponse = data.choices[0]?.message?.content || 'Sorry, I could not generate a response.';
+
+    // Store chat message
+    const chatId = crypto.randomUUID();
+    const chatMessage = {
+      id: chatId,
+      groupId: groupId || null,
+      userId: user.id,
+      userMessage: message,
+      aiResponse,
+      timestamp: new Date().toISOString()
+    };
+
+    await kv.set(`chat:${chatId}`, chatMessage);
+
+    // Add to group's chat history if groupId provided
+    if (groupId) {
+      const group = await kv.get(`group:${groupId}`);
+      if (group) {
+        const updatedGroup = { 
+          ...group, 
+          chatHistory: [...(group.chatHistory || []), chatId] 
+        };
+        await kv.set(`group:${groupId}`, updatedGroup);
+      }
+    }
+
+    return c.json({ response: aiResponse, chatId });
   } catch (error) {
-    console.log(`Error getting PlanPal suggestions: ${error}`);
-    return c.json({ error: `Failed to get suggestions: ${error}` }, 500);
+    console.log(`Chat error: ${error}`);
+    return c.json({ error: 'Failed to process chat message' }, 500);
+  }
+});
+
+app.get('/make-server-d40630a2/chat/:groupId', async (c) => {
+  try {
+    const user = await getAuthUser(c.req.raw);
+    if (!user) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const groupId = c.req.param('groupId');
+    const group = await kv.get(`group:${groupId}`);
+    
+    if (!group) {
+      return c.json({ error: 'Group not found' }, 404);
+    }
+
+    if (!group.members.includes(user.id)) {
+      return c.json({ error: 'Unauthorized' }, 403);
+    }
+
+    const chatIds = group.chatHistory || [];
+    const chats = await Promise.all(
+      chatIds.map(async (chatId: string) => await kv.get(`chat:${chatId}`))
+    );
+
+    // Get user names for chat messages
+    const chatsWithUserNames = await Promise.all(
+      chats.filter(Boolean).map(async (chat: any) => {
+        const userProfile = await kv.get(`user:${chat.userId}`);
+        return {
+          ...chat,
+          userName: userProfile?.name || 'Unknown User'
+        };
+      })
+    );
+
+    return c.json({ chats: chatsWithUserNames });
+  } catch (error) {
+    console.log(`Get chat history error: ${error}`);
+    return c.json({ error: 'Failed to fetch chat history' }, 500);
   }
 });
 

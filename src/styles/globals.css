@@ -2,87 +2,80 @@
 
 :root {
   --font-size: 16px;
-  
-  /* Dark mode with purple/neon theme - Always enabled */
-  --background: #0a0015;
-  --foreground: #e0d4ff;
-  --card: #1a0f2e;
-  --card-foreground: #e0d4ff;
-  --popover: #1a0f2e;
-  --popover-foreground: #e0d4ff;
-  --primary: #a855f7;
-  --primary-foreground: #ffffff;
-  --secondary: #2d1b4e;
-  --secondary-foreground: #e0d4ff;
-  --muted: #2d1b4e;
-  --muted-foreground: #9b7fc9;
-  --accent: #7c3aed;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
+  --background: #ffffff;
+  --foreground: oklch(0.145 0 0);
+  --card: #ffffff;
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: #030213;
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.95 0.0058 264.53);
+  --secondary-foreground: #030213;
+  --muted: #ececf0;
+  --muted-foreground: #717182;
+  --accent: #e9ebef;
+  --accent-foreground: #030213;
+  --destructive: #d4183d;
   --destructive-foreground: #ffffff;
-  --border: rgba(168, 85, 247, 0.2);
-  --input: rgba(168, 85, 247, 0.1);
-  --input-background: #1a0f2e;
-  --switch-background: #2d1b4e;
+  --border: rgba(0, 0, 0, 0.1);
+  --input: transparent;
+  --input-background: #f3f3f5;
+  --switch-background: #cbced4;
   --font-weight-medium: 500;
   --font-weight-normal: 400;
-  --ring: #a855f7;
-  --chart-1: #a855f7;
-  --chart-2: #ec4899;
-  --chart-3: #8b5cf6;
-  --chart-4: #d946ef;
-  --chart-5: #c026d3;
-  --radius: 0.75rem;
-  --sidebar: #1a0f2e;
-  --sidebar-foreground: #e0d4ff;
-  --sidebar-primary: #a855f7;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #2d1b4e;
-  --sidebar-accent-foreground: #e0d4ff;
-  --sidebar-border: rgba(168, 85, 247, 0.2);
-  --sidebar-ring: #a855f7;
-  
-  /* Neon glow colors */
-  --neon-purple: #a855f7;
-  --neon-pink: #ec4899;
-  --neon-blue: #3b82f6;
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: #030213;
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
-  --background: #0a0015;
-  --foreground: #e0d4ff;
-  --card: #1a0f2e;
-  --card-foreground: #e0d4ff;
-  --popover: #1a0f2e;
-  --popover-foreground: #e0d4ff;
-  --primary: #a855f7;
-  --primary-foreground: #ffffff;
-  --secondary: #2d1b4e;
-  --secondary-foreground: #e0d4ff;
-  --muted: #2d1b4e;
-  --muted-foreground: #9b7fc9;
-  --accent: #7c3aed;
-  --accent-foreground: #ffffff;
-  --destructive: #ef4444;
-  --destructive-foreground: #ffffff;
-  --border: rgba(168, 85, 247, 0.2);
-  --input: rgba(168, 85, 247, 0.1);
-  --ring: #a855f7;
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.396 0.141 25.723);
+  --destructive-foreground: oklch(0.637 0.237 25.331);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
   --font-weight-medium: 500;
   --font-weight-normal: 400;
-  --chart-1: #a855f7;
-  --chart-2: #ec4899;
-  --chart-3: #8b5cf6;
-  --chart-4: #d946ef;
-  --chart-5: #c026d3;
-  --sidebar: #1a0f2e;
-  --sidebar-foreground: #e0d4ff;
-  --sidebar-primary: #a855f7;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #2d1b4e;
-  --sidebar-accent-foreground: #e0d4ff;
-  --sidebar-border: rgba(168, 85, 247, 0.2);
-  --sidebar-ring: #a855f7;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
 }
 
 @theme inline {
@@ -133,63 +126,6 @@
 
   body {
     @apply bg-background text-foreground;
-    background-image: 
-      radial-gradient(at 0% 0%, rgba(168, 85, 247, 0.1) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, rgba(236, 72, 153, 0.1) 0px, transparent 50%),
-      radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%),
-      radial-gradient(at 0% 100%, rgba(124, 58, 237, 0.1) 0px, transparent 50%);
-  }
-}
-
-/* Neon glow effects */
-@layer utilities {
-  .neon-glow {
-    box-shadow: 0 0 10px rgba(168, 85, 247, 0.3),
-                0 0 20px rgba(168, 85, 247, 0.2),
-                0 0 30px rgba(168, 85, 247, 0.1);
-  }
-  
-  .neon-glow-strong {
-    box-shadow: 0 0 15px rgba(168, 85, 247, 0.5),
-                0 0 30px rgba(168, 85, 247, 0.3),
-                0 0 45px rgba(168, 85, 247, 0.2);
-  }
-  
-  .neon-text {
-    text-shadow: 0 0 10px rgba(168, 85, 247, 0.8),
-                 0 0 20px rgba(168, 85, 247, 0.5),
-                 0 0 30px rgba(168, 85, 247, 0.3);
-  }
-  
-  .neon-border {
-    border: 1px solid rgba(168, 85, 247, 0.5);
-    box-shadow: 0 0 10px rgba(168, 85, 247, 0.2),
-                inset 0 0 10px rgba(168, 85, 247, 0.1);
-  }
-  
-  .neon-pulse {
-    animation: neon-pulse 2s ease-in-out infinite;
-  }
-  
-  @keyframes neon-pulse {
-    0%, 100% {
-      box-shadow: 0 0 10px rgba(168, 85, 247, 0.3),
-                  0 0 20px rgba(168, 85, 247, 0.2),
-                  0 0 30px rgba(168, 85, 247, 0.1);
-    }
-    50% {
-      box-shadow: 0 0 15px rgba(168, 85, 247, 0.5),
-                  0 0 30px rgba(168, 85, 247, 0.3),
-                  0 0 45px rgba(168, 85, 247, 0.2);
-    }
-  }
-  
-  .gradient-purple {
-    background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
-  }
-  
-  .gradient-neon {
-    background: linear-gradient(135deg, #7c3aed 0%, #a855f7 50%, #ec4899 100%);
   }
 }
 
@@ -250,4 +186,22 @@
 
 html {
   font-size: var(--font-size);
+}
+
+/* Neon glow effects for purple theme */
+@layer utilities {
+  .neon-glow {
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.5), 0 0 20px rgba(168, 85, 247, 0.3);
+  }
+  
+  .neon-text {
+    text-shadow: 0 0 10px rgba(168, 85, 247, 0.8), 0 0 20px rgba(168, 85, 247, 0.5);
+  }
+}
+
+/* Smooth scrolling */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
 }
